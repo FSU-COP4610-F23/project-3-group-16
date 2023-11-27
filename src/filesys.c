@@ -1,6 +1,4 @@
-
 #include "filesys.h"
-
 #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -15,8 +13,9 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 
-
-typedef struct __attribute__((packed)) BPB {
+// STRUCTS
+typedef struct __attribute__((packed)) BPB
+{
     // below 36 bytes are the main bpb
 	uint8_t BS_jmpBoot[3];
 	char BS_OEMName[8];
@@ -40,29 +39,43 @@ typedef struct __attribute__((packed)) BPB {
     // //4
 
     uint32_t BPB_FATSz32;
+    uint16_t BPB_ExtFlags;
+    uint16_t BPB_FSVer;
     uint32_t BPB_RootClus;
+    uint16_t BPB_FSInfo;
+    uint16_t BPB_BkBootSec;
+    char BPS_Reserved[96]; // maybe 12 not 96
+    // char padding1[144]; // maybe 18 not 144
+    // char padding2[]
 
 } bpb_t;
 
-
-// Variables 
-bpb_t bpb; // instance of the struct
-
-
-typedef struct __attribute__((packed)) directory_entry {
-    char DIR_Name[11];
-    uint8_t DIR_Attr;
+typedef struct __attribute__((packed)) directory_entry
+{
+    char DIR_Name[11]; // Name of directory retrieved
+    uint8_t DIR_Attr;   // Attribute count of directory retreived
     char padding_1[8]; // DIR_NTRes, DIR_CrtTimeTenth, DIR_CrtTime, DIR_CrtDate, 
                        // DIR_LstAccDate. Since these fields are not used in
                        // Project 3, just define as a placeholder.
     uint16_t DIR_FstClusHI;
     char padding_2[4]; // DIR_WrtTime, DIR_WrtDate
     uint16_t DIR_FstClusLO;
-    uint32_t DIR_FileSize;
+    uint32_t DIR_FileSize; // Size of directory (always 0)
 } dentry_t;
+dentry_t dir[100]; // 100 is arbitrary and magic number
 
+
+// VARIABLES 
+bpb_t bpb; // instance of the struct
+int32_t currentDirectory;
+
+
+
+
+// FUNCTIONS
 //decoding directory entry
-dentry_t *encode_dir_entry(int fat32_fd, uint32_t offset) {
+dentry_t *encode_dir_entry(int fat32_fd, uint32_t offset)
+{
     dentry_t *dentry = (dentry_t*)malloc(sizeof(dentry_t));
     ssize_t rd_bytes = pread(fat32_fd, (void*)dentry, sizeof(dentry_t), offset);
     
@@ -88,35 +101,11 @@ void mount_fat32(FILE* fd)
     // printf("BPB_BytsPerSec: %u\n", bpb.BPB_BytsPerSec);
     
     // determine the root BPB_RootClus
-    int root_clus = bpb.BPB_RootClus;
+    int32_t root_clus = bpb.BPB_RootClus;
+    currentDirectory = root_clus;
 
-    // 1. allter: we can read all entries inside root here
-    dentry_t 
-    all_entries = get_entries_from_cluster()
-
-
-    // 2. need a data structure to keep track of cwd (char array)
-
-CWD: /DIR1/DIR2
-all_direntries = get_entries_from_cluster(rootCLuster)
-for (token in cwd) {
-    for entry in all_direntry {
-        if toekn == entry->name {
-            found = true;
-            break;
-        }
-    }
-
-    if found != true {
-        "token not found"
-        brek;
-    }
-
-    cluster_of_the_found_entry = entry->cluHi << 16 + entry->cluLo;
-    all_direntries = get_entries_from_cluster(cluster_of_the_found_entry)
-}
-
-
+    fread(&dir[0], 32, 16, fd);
+    // printf("dir: %s\n", dir[0]);
 }
 
 void executeInfo(bpb_t *bpb)
@@ -149,7 +138,6 @@ void executeInfo(bpb_t *bpb)
     }
     printf("Size of Image (in bytes): %d\n", (int)(((intmax_t)st.st_size)/8)); // This might be wrong. Look at slide 21 of S6
 
-
 }
 
 // function to process cd
@@ -159,21 +147,71 @@ void executeCD(bpb_t *bpb)
 
 }
 
+void executeLS(bpb_t *bpb)
+{
+    // 1. alternative: we can read all entries inside root here
+    // dentry_t 
+    // all_entries = get_entries_from_cluster()
+
+
+    // 2. need a data structure to keep track of cwd (char array)
+
+// CWD: /DIR1/DIR2
+// all_direntries = get_entries_from_cluster(rootCLuster) //getCluster
+// for (token in cwd) {
+//     for entry in all_direntry {
+//         if toekn == entry->name {
+//             found = true;
+//             break;
+//         }
+//     }
+
+//     if found != true {
+//         "token not found"
+//         brek;
+//     }
+
+//     cluster_of_the_found_entry = entry->cluHi << 16 + entry->cluLo;
+//     all_direntries = get_entries_from_cluster(cluster_of_the_found_entry)
+// }
+
+
+// CWD: /DIR1/DIR2
+// all_direntries = get_entries_from_cluster(rootCLuster)
+// for (token in cwd) {
+//     for entry in all_direntry {
+//         if toekn == entry->name {
+//             found = true;
+//             break;
+//         }
+//     }
+
+//     if found != true {
+//         "token not found"
+//         break;
+//     }
+
+//     cluster_of_the_found_entry = entry->cluHi << 16 + entry->cluLo;
+//     all_direntries = get_entries_from_cluster(cluster_of_the_found_entry)
+// }
+
+}
+
 // you can give it another name
 // fill the parameters
 void main_process(FILE* fd, const char* FILENAME)
 {
     int done = 0;
-
-    //may be in wrong place in main
-    uint32_t offset = 0x100420;
-    dentry_t *dentry = encode_dir_entry(fd, offset);
-    dbg_print_dentry(dentry);
     
     while (!done)
     {
+        printf("%s", FILENAME); // need to change this
+        // for(int i = 0; i < sizeOfCWD; i++)
+        // {
+        //     printf("%c", cwd[i]);
 
-        printf("%s%s>", FILENAME, getenv("PWD")); // need to change this
+        // }
+        printf(">");
 
         char *input = get_input();
 		tokenlist *tokens = get_tokens(input); // tokanize
@@ -195,15 +233,13 @@ void main_process(FILE* fd, const char* FILENAME)
             }
             else if(strcmp(tokens->items[tokens->size-1], "ls") == 0)
             {
-                
+                executeLS(&bpb);
             }
         }
 
 		free(input);
 		free_tokens(tokens);
 
-        free(dentry);
-        close(fd);
 
         // 1. get cmd from input.
         // you can use the parser provided in Project1
@@ -219,8 +255,6 @@ void main_process(FILE* fd, const char* FILENAME)
 
 int main(int argc, char const *argv[]) //image file 
 {
-    // Variables
-
     // 1. open the fat32.img - original code was open the file in read only
     // fd = open(argv[1], O_RDWR); // read and write
     FILE* fd = fopen(argv[1], "rw");
@@ -228,6 +262,10 @@ int main(int argc, char const *argv[]) //image file
         perror("Error opening file failed: ");
         return 1;
     }
+
+    //may be in wrong place in main
+    uint32_t offset = 0x100420;
+    dentry_t *dentry = encode_dir_entry(fd, offset);
 
     // 2. mount the fat32.img
     // mount: decode BPB --> locate root directory --> decode the directory
@@ -237,11 +275,13 @@ int main(int argc, char const *argv[]) //image file
     // setenv("USER", argv[1], 1);
     const char* FILENAME = argv[1];
 
-
     // 3. main procees
     main_process(fd, FILENAME);
 
     // 4. close all opened files
+
+    free(dentry);
+    close(fd);
 
     // 5. close the fat32.img
     fclose(fd);
@@ -259,7 +299,8 @@ int main(int argc, char const *argv[]) //image file
 
 
 // lexer.c
-char *get_input(void) {
+char *get_input(void)
+{
 	char *buffer = NULL;
 	int bufsize = 0;
 	char line[5];
@@ -282,7 +323,8 @@ char *get_input(void) {
 	return buffer;
 }
 
-tokenlist *new_tokenlist(void) {
+tokenlist *new_tokenlist(void)
+{
 	tokenlist *tokens = (tokenlist *)malloc(sizeof(tokenlist));
 	tokens->size = 0;
 	tokens->items = (char **)malloc(sizeof(char *));
@@ -290,7 +332,8 @@ tokenlist *new_tokenlist(void) {
 	return tokens;
 }
 
-void add_token(tokenlist *tokens, char *item) {
+void add_token(tokenlist *tokens, char *item)
+{
 	int i = tokens->size;
 
 	tokens->items = (char **)realloc(tokens->items, (i + 2) * sizeof(char *));
@@ -301,7 +344,8 @@ void add_token(tokenlist *tokens, char *item) {
 	tokens->size += 1;
 }
 
-tokenlist *get_tokens(char *input) {
+tokenlist *get_tokens(char *input)
+{
 	char *buf = (char *)malloc(strlen(input) + 1);
 	strcpy(buf, input);
 	tokenlist *tokens = new_tokenlist();
@@ -315,7 +359,8 @@ tokenlist *get_tokens(char *input) {
 	return tokens;
 }
 
-void free_tokens(tokenlist *tokens) {
+void free_tokens(tokenlist *tokens)
+{
 	for (int i = 0; i < tokens->size; i++)
 		free(tokens->items[i]);
 	free(tokens->items);
