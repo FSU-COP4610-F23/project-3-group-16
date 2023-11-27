@@ -89,22 +89,33 @@ void mount_fat32(FILE* fd)
     
     // determine the root BPB_RootClus
     int root_clus = bpb.BPB_RootClus;
-    // need a data structure to keep track of cwd (char array)
-/* CWD: /DIR1/DIR2
-all_direntries = get_entires_from_cluster(rootCLus)
+
+    // 1. allter: we can read all entries inside root here
+    dentry_t 
+    all_entries = get_entries_from_cluster()
+
+
+    // 2. need a data structure to keep track of cwd (char array)
+
+CWD: /DIR1/DIR2
+all_direntries = get_entries_from_cluster(rootCLuster)
 for (token in cwd) {
-	for entry in all_direntry {
-		if token == entry->name {
-			found = true;
-			break;
-		}
-	}
-	if found !=true {
-		"token not found"
-		break;
-	}
-	cluster_of_the_found_entry = entry->clusHigh << 16 + entry->ClusLow;
-	all dirEntries = get_entries_from_cluster(cluster_of_the_found_entry)
+    for entry in all_direntry {
+        if toekn == entry->name {
+            found = true;
+            break;
+        }
+    }
+
+    if found != true {
+        "token not found"
+        brek;
+    }
+
+    cluster_of_the_found_entry = entry->cluHi << 16 + entry->cluLo;
+    all_direntries = get_entries_from_cluster(cluster_of_the_found_entry)
+}
+
 
 }
 
