@@ -1,3 +1,10 @@
+/*
+Things To Do:
+- Check if the file exists (command line argument)
+
+
+*/
+
 #include "filesys.h"
 #include <string.h>
 #include <unistd.h>
@@ -44,9 +51,9 @@ typedef struct __attribute__((packed)) BPB
     uint32_t BPB_RootClus;
     uint16_t BPB_FSInfo;
     uint16_t BPB_BkBootSec;
-    char BPS_Reserved[96]; // maybe 12 not 96
-    // char padding1[144]; // maybe 18 not 144
-    // char padding2[]
+    char BPS_Reserved[12]; // maybe 12 not 96
+    char padding1[18]; // maybe 18 not 144
+    char BS_FilSysType[8];
 
 } bpb_t;
 
@@ -62,11 +69,11 @@ typedef struct __attribute__((packed)) directory_entry
     uint16_t DIR_FstClusLO;
     uint32_t DIR_FileSize; // Size of directory (always 0)
 } dentry_t;
-dentry_t dir[100]; // 100 is arbitrary and magic number
-
 
 // VARIABLES 
 bpb_t bpb; // instance of the struct
+dentry_t dir[16]; // 16 is arbitrary and magic number
+dentry_t dentry; 
 int32_t currentDirectory;
 
 
@@ -74,12 +81,20 @@ int32_t currentDirectory;
 
 // FUNCTIONS
 //decoding directory entry
-dentry_t *encode_dir_entry(int fat32_fd, uint32_t offset)
+dentry_t *encode_dir_entry(FILE *fd, uint32_t offset)
 {
     dentry_t *dentry = (dentry_t*)malloc(sizeof(dentry_t));
-    ssize_t rd_bytes = pread(fat32_fd, (void*)dentry, sizeof(dentry_t), offset);
+    fseek(fd, offset, SEEK_SET);
+
+    size_t rd_bytes = fread((void*)dentry, sizeof(dentry_t), 1, fd);
     
     // omitted: check rd_bytes == sizeof(dentry_t)
+    if(rd_bytes != 1)
+    {
+        fprintf(stderr, "Error reading directory entry from file. \n");
+        free(dentry);
+        return NULL;
+    }
 
     return dentry;
 }
@@ -98,11 +113,10 @@ void mount_fat32(FILE* fd)
     // read the bpb data structure
     fseek(fd, 0, SEEK_SET);
     fread(&bpb, sizeof(bpb_t), 1, fd);
-    // printf("BPB_BytsPerSec: %u\n", bpb.BPB_BytsPerSec);
-    
+        
     // determine the root BPB_RootClus
-    int32_t root_clus = bpb.BPB_RootClus;
-    currentDirectory = root_clus;
+    // int32_t root_clus = bpb.BPB_RootClus;
+    currentDirectory = bpb.BPB_RootClus;
 
     fread(&dir[0], 32, 16, fd);
     // printf("dir: %s\n", dir[0]);
@@ -140,21 +154,126 @@ void executeInfo(bpb_t *bpb)
 
 }
 
-// function to process cd
-void executeCD(bpb_t *bpb)
+int getClusterOffset(bpb_t *bpb, int32_t clusterNumber)
+{
+    // printf("Inside getClusterOffset\n");
+
+    int clusterOffset;
+    
+    if(clusterNumber == 0)
+        clusterNumber = 2;
+    else
+    {
+        clusterOffset = ((clusterNumber -2) * bpb->BPB_BytsPerSec) + 
+        (bpb->BPB_BytsPerSec * bpb->BPB_RsvdSecCnt) + (bpb->BPB_NumFATs * bpb->BPB_FATSz32 * bpb->BPB_BytsPerSec);
+        printf("Cluster offset = %d\n", clusterOffset);
+    }
+
+    return clusterOffset;
+    
+    // return ((clusterNumber -2) * bpb->BPB_BytsPerSec) + 
+    //     (bpb->BPB_BytsPerSec * bpb->BPB_RsvdSecCnt) + 
+    //     (bpb->BPB_NumFATs * bpb->BPB_FATSz32 * bpb->BPB_BytsPerSec);
+}
+
+void traverseDirectoryChain(FILE* fd, uint32_t clusterNumber)
+{
+    printf("clusterNumber: %d\n", clusterNumber);
+    while (clusterNumber != 0xFFFFFFFF && clusterNumber >= 2)
+    {
+        printf("got here\n");
+        // Assuming each entry is of type dentry_t
+        dentry_t *dentry = encode_dir_entry(fd, getClusterOffset(&bpb, clusterNumber)); // clusterNumber may be wrong
+
+        // Process the entry as needed (e.g., print the directory name)
+        printf("%s\n", dentry->DIR_Name);
+
+        // Move to the next cluster in the chain
+        clusterNumber = dentry->DIR_FstClusLO | (dentry->DIR_FstClusHI << 16);
+
+        // Free the memory allocated for the entry
+        free(dentry);
+    }
+}
+
+void findCWD(FILE* fd, int32_t currentDirectory)
+{
+    // Assuming currentDirectory is the cluster number of the desired directory
+    traverseDirectoryChain(fd, currentDirectory);
+}
+
+void executeCD(FILE *fd, tokenlist *tokens)
 {
     // decode the directory -> find entry
+    int offset = 0x100400; // NEED TO CHANGE THIS TO A FUNCTION LATER PLZ NO MAGIC IN THIS CODE THX ********************************************
+    fseek(fd, offset, SEEK_SET);
+
+    int i = 0;
+    while(1)
+    {
+        fread(&dir[i], 32, 1, fd); // 32 because of FAT32
+
+        // no more directory entries or files to read
+        if (dir[i].DIR_Attr == 0x00)
+            break;
+
+        // printf("tokens->items[1] is *%s*"\n, tokens->items[1]);
+
+        if(dir[i].DIR_Attr == 0x10) // only look at directories
+        {
+            // 11 becuase there are 11 hexedecimal places for the directory/file name
+            char *directory = malloc(11);
+            memset(directory, '\0', 11);
+            memcpy(directory, dir[i].DIR_Name, 11);
+            // This string compare only checks the frist x amount of letters 
+            // x is the number of letters of the word passed into via cd
+            // So if you pass in BLUE, but there is BLUE1 and BLUE then it might go into wrong one
+            if(!strncmp(tokens->items[1], directory, strlen(tokens->items[1])))
+            {
+                printf("YOU HAVE FOUND THE DIRECTORY TO GO INTO\n");
+            }
+        }
+        i++;
+    }
+    printf("\n");
 
 }
 
-void executeLS(bpb_t *bpb)
+void executeLS(FILE *fd)
 {
-    // 1. alternative: we can read all entries inside root here
-    // dentry_t 
-    // all_entries = get_entries_from_cluster()
+    int offset = 0x100400; // NEED TO CHANGE THIS TO A FUNCTION LATER PLZ NO MAGIC IN THIS CODE THX ********************************************
+    fseek(fd, offset, SEEK_SET);
+
+    int i = 0;
+    while(1)
+    {
+        fread(&dir[i], 32, 1, fd); // 32 because of FAT32
+
+        // no more directory entries or files to read
+        if (dir[i].DIR_Attr == 0x00)
+            break;
+
+        if(
+            (dir[i].DIR_Attr == 0x1 || dir[i].DIR_Attr == 0x10 || dir[i].DIR_Attr == 0x20))
+        {
+            // 11 becuase there are 11 hexedecimal places for the directory/file name
+            char *directory = malloc(11);
+            memset(directory, '\0', 11);
+            memcpy(directory, dir[i].DIR_Name, 11);
+            printf("%s", directory);
+        }
+        i++;
+    }
+    printf("\n");
 
 
-    // 2. need a data structure to keep track of cwd (char array)
+// Bing:
+// 1. alternative: we can read all entries inside root here - doing this one
+// dentry_t 
+// all_entries = get_entries_from_cluster()
+
+
+// 2. need a data structure to keep track of cwd (char array)
 
 // CWD: /DIR1/DIR2
 // all_direntries = get_entries_from_cluster(rootCLuster) //getCluster
@@ -169,26 +288,6 @@ void executeLS(bpb_t *bpb)
 //     if found != true {
 //         "token not found"
 //         brek;
-//     }
-
-//     cluster_of_the_found_entry = entry->cluHi << 16 + entry->cluLo;
-//     all_direntries = get_entries_from_cluster(cluster_of_the_found_entry)
-// }
-
-
-// CWD: /DIR1/DIR2
-// all_direntries = get_entries_from_cluster(rootCLuster)
-// for (token in cwd) {
-//     for entry in all_direntry {
-//         if toekn == entry->name {
-//             found = true;
-//             break;
-//         }
-//     }
-
-//     if found != true {
-//         "token not found"
-//         break;
 //     }
 
 //     cluster_of_the_found_entry = entry->cluHi << 16 + entry->cluLo;
@@ -211,17 +310,13 @@ void main_process(FILE* fd, const char* FILENAME)
         //     printf("%c", cwd[i]);
 
         // }
-        printf(">");
+        printf("> ");
 
         char *input = get_input();
 		tokenlist *tokens = get_tokens(input); // tokanize
 
         // If no entry
-		if(tokens->size == 0) //if no input, move on and ask for input again 
-        {
-			printf("\n"); // print a line
-		}
-        else 
+		if(tokens->size != 0) //if no input, move on and ask for input again 
         {
 			if(strcmp(tokens->items[tokens->size-1], "info") == 0)
             {
@@ -231,9 +326,13 @@ void main_process(FILE* fd, const char* FILENAME)
             {
                 done = 1;
             }
-            else if(strcmp(tokens->items[tokens->size-1], "ls") == 0)
+            else if(strcmp(tokens->items[0], "ls") == 0)
             {
-                executeLS(&bpb);
+                executeLS(fd);
+            }
+            else if(strcmp(tokens->items[0], "cd") == 0)
+            {
+                executeCD(fd, tokens);
             }
         }
 
@@ -281,7 +380,7 @@ int main(int argc, char const *argv[]) //image file
     // 4. close all opened files
 
     free(dentry);
-    close(fd);
+    // close(fd);
 
     // 5. close the fat32.img
     fclose(fd);
