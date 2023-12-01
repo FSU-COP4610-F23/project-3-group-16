@@ -1,8 +1,15 @@
 /*
+Questions:
+- offset?
+- how do you find the next cluster chain and how do you know where the file ends?
+- how do you calculate the FAT offset (0x4000)
+
 Things To Do:
 - Check if the file exists (command line argument)
 
-
+Next time:
+-start with getting 0x4000 from github ex - FAT region offset
+-keep in mind its just doing the same process over and over again, finding next cluster chain then finding contents of file/dir
 */
 
 #include "filesys.h"
@@ -73,8 +80,10 @@ typedef struct __attribute__((packed)) directory_entry
 // VARIABLES 
 bpb_t bpb; // instance of the struct
 dentry_t dir[16]; // 16 is arbitrary and magic number
-dentry_t dentry; 
+dentry_t dentry; // this might be our current directory but right now it is not saved that way
 int32_t currentDirectory;
+int currentOffset;
+char *prompt[256];
 
 
 
@@ -104,6 +113,35 @@ dentry_t *encode_dir_entry(FILE *fd, uint32_t offset)
 // the current working directory
 // the opened files
 // other data structures and global variables you need
+int getRootDirSectors()
+{
+    return ((bpb.BPB_RootEntCnt * 32) + (bpb.BPB_BytsPerSec - 1)) / bpb.BPB_BytsPerSec;
+}
+
+int getFirstSectorOfCluster(int clusterNumber, int firstDataSector)
+{
+    return ((clusterNumber - 2) * bpb.BPB_SecPerClus) + firstDataSector;
+}
+
+int getDirectoryClusterNumber(int clusterNumber, dentry_t dirToGoTo) // clusterNumber = N
+{
+    int firstDataSector = bpb.BPB_RsvdSecCnt + (bpb.BPB_NumFATs * bpb.BPB_FATSz32) + getRootDirSectors();
+    int firstSectorOfCluster = getFirstSectorOfCluster(clusterNumber, firstDataSector);
+    // << is binary left shift 
+    uint16_t newClusterNumber = (dirToGoTo.DIR_FstClusHI << 16) + dirToGoTo.DIR_FstClusLO; // gives us hex
+    printf("first data sector is calculated to be: %d\n", firstDataSector); // right now printing 2050, should be 100400
+    printf("first sector of cluster is calculated to be: %d\n", firstSectorOfCluster);
+    printf("low is %d, high is %d\n", dirToGoTo.DIR_FstClusLO, dirToGoTo.DIR_FstClusHI);
+    printf("new cluster number is calculated to be: %d\n", newClusterNumber);
+
+    int newAddress = 0x100400 + (newClusterNumber - 2) * bpb.BPB_BytsPerSec;
+    printf("new address is calculated to be: %d\n", newAddress);
+    return newAddress;
+    // newClusterNumber gets you to a place that tells you how many fiels and directories are in the new directory
+        // the number tells you how many entries you need to update in dir
+    // then you go to the first cluster int he data region (using 100400 +433-2) * 512 = the number on the left in hexedit
+}
+
 
 // you can give it another name
 // fill the parameters
@@ -119,7 +157,9 @@ void mount_fat32(FILE* fd)
     currentDirectory = bpb.BPB_RootClus;
 
     fread(&dir[0], 32, 16, fd);
-    // printf("dir: %s\n", dir[0]);
+
+    int clusterNumber = 2;
+    currentOffset = getDirectoryClusterNumber(clusterNumber, dentry); // passing in 2 becuase that is original cluster number 
 }
 
 void executeInfo(bpb_t *bpb)
@@ -139,7 +179,7 @@ void executeInfo(bpb_t *bpb)
     printf("Position of Root Cluster: %d\n", bpb->BPB_RootClus);
     printf("Bytes Per Sector: %d\n", bpb->BPB_BytsPerSec);
     printf("Sectors Per Cluster: %d\n", bpb->BPB_SecPerClus);
-    int rootDirSectors = ((bpb->BPB_RootEntCnt * 32) + (bpb->BPB_BytsPerSec - 1)) / bpb->BPB_BytsPerSec;
+    int rootDirSectors = getRootDirSectors();
     int dataSec = bpb->BPB_TotSec32 - (bpb->BPB_RsvdSecCnt + 
         (bpb->BPB_NumFATs * bpb->BPB_FATSz32) + rootDirSectors);
     int countOfClusters = dataSec / bpb->BPB_SecPerClus;
@@ -206,6 +246,7 @@ void executeCD(FILE *fd, tokenlist *tokens)
 {
     // decode the directory -> find entry
     int offset = 0x100400; // NEED TO CHANGE THIS TO A FUNCTION LATER PLZ NO MAGIC IN THIS CODE THX ********************************************
+    
     fseek(fd, offset, SEEK_SET);
 
     int i = 0;
@@ -231,6 +272,8 @@ void executeCD(FILE *fd, tokenlist *tokens)
             if(!strncmp(tokens->items[1], directory, strlen(tokens->items[1])))
             {
                 printf("YOU HAVE FOUND THE DIRECTORY TO GO INTO\n");
+                getDirectoryClusterNumber(2, dir[i]);
+                dentry = dir[i];
             }
         }
         i++;
