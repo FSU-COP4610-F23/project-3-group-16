@@ -2,6 +2,8 @@
 Questions:
 - offset?
 - how do you find the next cluster chain and how do you know where the file ends?
+    if it is not a valid clusterNumber then it is the end of the chain(file), section 3.5 of spec, 0x000002 to MAX
+    MAX = max valid cluster number (countOfClusters +)
 - how do you calculate the FAT offset (0x4000)
 
 Things To Do:
@@ -80,32 +82,32 @@ typedef struct __attribute__((packed)) directory_entry
 // VARIABLES 
 bpb_t bpb; // instance of the struct
 dentry_t dir[16]; // 16 is arbitrary and magic number
-dentry_t dentry; // this might be our current directory but right now it is not saved that way
+// dentry_t dentry; // this might be our current directory but right now it is not saved that way
 int32_t currentDirectory;
 int currentOffset;
 char *prompt[256];
-
-
+uint32_t FATRegionStart;
+uint32_t DataRegionStart;
 
 
 // FUNCTIONS
 //decoding directory entry
 dentry_t *encode_dir_entry(FILE *fd, uint32_t offset)
 {
-    dentry_t *dentry = (dentry_t*)malloc(sizeof(dentry_t));
+    dentry_t *temp = (dentry_t*)malloc(sizeof(dentry_t));
     fseek(fd, offset, SEEK_SET);
 
-    size_t rd_bytes = fread((void*)dentry, sizeof(dentry_t), 1, fd);
+    size_t rd_bytes = fread((void*)temp, sizeof(dentry_t), 1, fd);
     
     // omitted: check rd_bytes == sizeof(dentry_t)
     if(rd_bytes != 1)
     {
         fprintf(stderr, "Error reading directory entry from file. \n");
-        free(dentry);
+        free(temp);
         return NULL;
     }
 
-    return dentry;
+    return temp;
 }
 // other data structure, global variables, etc. define them in need.
 // e.g., 
@@ -123,15 +125,15 @@ int getFirstSectorOfCluster(int clusterNumber, int firstDataSector)
     return ((clusterNumber - 2) * bpb.BPB_SecPerClus) + firstDataSector;
 }
 
-int getDirectoryClusterNumber(int clusterNumber, dentry_t dirToGoTo) // clusterNumber = N
+int getDirectoryClusterNumber(int clusterNumber, dentry_t *dirToGoTo) // clusterNumber = N
 {
     int firstDataSector = bpb.BPB_RsvdSecCnt + (bpb.BPB_NumFATs * bpb.BPB_FATSz32) + getRootDirSectors();
     int firstSectorOfCluster = getFirstSectorOfCluster(clusterNumber, firstDataSector);
     // << is binary left shift 
-    uint16_t newClusterNumber = (dirToGoTo.DIR_FstClusHI << 16) + dirToGoTo.DIR_FstClusLO; // gives us hex
+    uint16_t newClusterNumber = (dirToGoTo->DIR_FstClusHI << 16) + dirToGoTo->DIR_FstClusLO; // gives us hex
     printf("first data sector is calculated to be: %d\n", firstDataSector); // right now printing 2050, should be 100400
     printf("first sector of cluster is calculated to be: %d\n", firstSectorOfCluster);
-    printf("low is %d, high is %d\n", dirToGoTo.DIR_FstClusLO, dirToGoTo.DIR_FstClusHI);
+    printf("low is %d, high is %d\n", dirToGoTo->DIR_FstClusLO, dirToGoTo->DIR_FstClusHI);
     printf("new cluster number is calculated to be: %d\n", newClusterNumber);
 
     int newAddress = 0x100400 + (newClusterNumber - 2) * bpb.BPB_BytsPerSec;
@@ -142,24 +144,31 @@ int getDirectoryClusterNumber(int clusterNumber, dentry_t dirToGoTo) // clusterN
     // then you go to the first cluster int he data region (using 100400 +433-2) * 512 = the number on the left in hexedit
 }
 
+void initializeVariables(dentry_t *dentry)
+{
+    FATRegionStart = bpb.BPB_BytsPerSec * bpb.BPB_RsvdSecCnt; // this is the 0x4000
+    DataRegionStart = FATRegionStart + (bpb.BPB_FATSz32 * bpb.BPB_NumFATs * bpb.BPB_BytsPerSec); // this is 0x100400
+    
+    int clusterNumber = 2;
+    currentOffset = getDirectoryClusterNumber(clusterNumber, dentry); // passing in 2 because that is original cluster number 
+}
+
 
 // you can give it another name
 // fill the parameters
-void mount_fat32(FILE* fd)
+void mount_fat32(FILE* fd, dentry_t *dentry)
 {
     // 1. decode the bpb
     // read the bpb data structure
     fseek(fd, 0, SEEK_SET);
-    fread(&bpb, sizeof(bpb_t), 1, fd);
-        
+    fread(&bpb, sizeof(bpb_t), 1, fd); // initializing bpb here
+    
     // determine the root BPB_RootClus
     // int32_t root_clus = bpb.BPB_RootClus;
     currentDirectory = bpb.BPB_RootClus;
 
     fread(&dir[0], 32, 16, fd);
-
-    int clusterNumber = 2;
-    currentOffset = getDirectoryClusterNumber(clusterNumber, dentry); // passing in 2 becuase that is original cluster number 
+    initializeVariables(dentry);    
 }
 
 void executeInfo(bpb_t *bpb)
@@ -216,6 +225,7 @@ int getClusterOffset(bpb_t *bpb, int32_t clusterNumber)
     //     (bpb->BPB_NumFATs * bpb->BPB_FATSz32 * bpb->BPB_BytsPerSec);
 }
 
+//This funciton is currently not used
 void traverseDirectoryChain(FILE* fd, uint32_t clusterNumber)
 {
     printf("clusterNumber: %d\n", clusterNumber);
@@ -242,7 +252,7 @@ void findCWD(FILE* fd, int32_t currentDirectory)
     traverseDirectoryChain(fd, currentDirectory);
 }
 
-void executeCD(FILE *fd, tokenlist *tokens)
+void executeCD(FILE *fd, tokenlist *tokens, dentry_t *dentry)
 {
     // decode the directory -> find entry
     int offset = 0x100400; // NEED TO CHANGE THIS TO A FUNCTION LATER PLZ NO MAGIC IN THIS CODE THX ********************************************
@@ -272,8 +282,8 @@ void executeCD(FILE *fd, tokenlist *tokens)
             if(!strncmp(tokens->items[1], directory, strlen(tokens->items[1])))
             {
                 printf("YOU HAVE FOUND THE DIRECTORY TO GO INTO\n");
-                getDirectoryClusterNumber(2, dir[i]);
-                dentry = dir[i];
+                getDirectoryClusterNumber(2, &dir[i]);
+                dentry = dir[i]; // found new directory so changing dentry (dentry = current dentry)
             }
         }
         i++;
@@ -341,7 +351,7 @@ void executeLS(FILE *fd)
 
 // you can give it another name
 // fill the parameters
-void main_process(FILE* fd, const char* FILENAME)
+void main_process(FILE* fd, const char* FILENAME, dentry_t *dentry)
 {
     int done = 0;
     
@@ -375,7 +385,7 @@ void main_process(FILE* fd, const char* FILENAME)
             }
             else if(strcmp(tokens->items[0], "cd") == 0)
             {
-                executeCD(fd, tokens);
+                executeCD(fd, tokens, dentry);
             }
         }
 
@@ -407,18 +417,23 @@ int main(int argc, char const *argv[]) //image file
 
     //may be in wrong place in main
     uint32_t offset = 0x100420;
-    dentry_t *dentry = encode_dir_entry(fd, offset);
+    dentry_t *dentry = encode_dir_entry(fd, offset); 
+    if(dentry == NULL)
+    {
+        printf("file name passed in not found, exiting program\n");
+        return 1;
+    }
 
     // 2. mount the fat32.img
     // mount: decode BPB --> locate root directory --> decode the directory
     // need to set cwd 
     // prompt format = file_name/path/to/cwd>
-    mount_fat32(fd);   
+    mount_fat32(fd, dentry);   
     // setenv("USER", argv[1], 1);
     const char* FILENAME = argv[1];
 
     // 3. main procees
-    main_process(fd, FILENAME);
+    main_process(fd, FILENAME, dentry);
 
     // 4. close all opened files
 
