@@ -3,8 +3,7 @@ Questions:
 - offset?
 - how do you find the next cluster chain and how do you know where the file ends?
     if it is not a valid clusterNumber then it is the end of the chain(file), section 3.5 of spec, 0x000002 to MAX
-    MAX = max valid cluster number (countOfClusters +)
-- how do you calculate the FAT offset (0x4000)
+    MAX = max valid cluster number (countOfClusters + 1)
 
 - why does cd BLUE1 not work
 - How do you cd .. (storing where you came from)
@@ -86,11 +85,17 @@ typedef struct __attribute__((packed)) directory_entry
 // VARIABLES 
 bpb_t bpb; // instance of the struct
 dentry_t dir[16]; // 16 is arbitrary and magic number
-// dentry_t dentry; // this might be our current directory but right now it is not saved that way
+dentry_t dentry; // this might be our current directory but right now it is not saved that way
 uint32_t currentDirectory; // this is the address of our current directory
 char *prompt[256];
+int sizeOfPrompt;
 uint32_t FATRegionStart;
 uint32_t dataRegionStart;
+uint32_t FATEntryOffset;
+uint32_t MAXValidClusterNum;
+int rootDirSectors;
+int dataSec;
+int countOfClusters;
 
 
 // FUNCTIONS
@@ -128,9 +133,9 @@ int getRootDirSectors()
 
 //MATH IS WRONG  ******************************************************************************************************
 
-int getDirSectorsForClusNum(uinnnnnnnnnnnnt32_t clus_num) // gives you the sector for clus_num cluster
+int getDirSectorsForClusNum(uint32_t clus_num) // gives you the sector for clus_num cluster
 {
-    return ((clus_num * 32) + (bpb.BPB_BytsPerSec - 1)) / bpb.BPB_BytsPerSec;
+    return ((clus_num * 32) + (bpb.BPB_BytsPerSec - 1)) / bpb.BPB_BytsPerSec; // BytsPerSec is 512
 }
 
 // Bing Sudo
@@ -162,11 +167,11 @@ int getDirectoryClusterNumber(int clusterNumber, dentry_t *dirToGoTo) // cluster
     uint16_t newClusterNumber = (dirToGoTo->DIR_FstClusHI << 16) + dirToGoTo->DIR_FstClusLO; // gives us hex
     // printf("first data sector is calculated to be: %d\n", firstDataSector); // right now printing 2050, should be 100400
     // printf("first sector of cluster is calculated to be: %d\n", firstSectorOfCluster);
-    printf("low is %d, high is %d\n", dirToGoTo->DIR_FstClusLO, dirToGoTo->DIR_FstClusHI);
-    printf("new cluster number is calculated to be: %d\n", newClusterNumber);
+    // printf("low is %d, high is %d\n", dirToGoTo->DIR_FstClusLO, dirToGoTo->DIR_FstClusHI);
+    // printf("new cluster number is calculated to be: %d\n", newClusterNumber);
 
     uint32_t newAddress = dataRegionStart + (newClusterNumber - 2) * bpb.BPB_BytsPerSec;
-    printf("new address is calculated to be: %d\n", newAddress);
+    // printf("new address is calculated to be: %d\n", newAddress);
     return newAddress;
 
     // newClusterNumber gets you to a place that tells you how many fiels and directories are in the new directory
@@ -174,20 +179,30 @@ int getDirectoryClusterNumber(int clusterNumber, dentry_t *dirToGoTo) // cluster
     // then you go to the first cluster int he data region (using 100400 +433-2) * 512 = the number on the left in hexedit
 }
 
-void initializeVariables(dentry_t *dentry)
+void initializeVariables()
 {
     FATRegionStart = bpb.BPB_BytsPerSec * bpb.BPB_RsvdSecCnt; // this is the 0x4000
     dataRegionStart = FATRegionStart + (bpb.BPB_FATSz32 * bpb.BPB_NumFATs * bpb.BPB_BytsPerSec); // this is 0x100400
     
-    int clusterNumber = (dentry->DIR_FstClusHI << 16) + dentry->DIR_FstClusLO; // gives us hex
+    int clusterNumber = (dentry.DIR_FstClusHI << 16) + dentry.DIR_FstClusLO; // gives us hex
     // int clusterNumber = 2;
-    currentDirectory = getDirectoryClusterNumber(clusterNumber, dentry); // passing in 2 because that is original cluster number 
+    currentDirectory = getDirectoryClusterNumber(clusterNumber, &dentry); // passing in 2 because that is original cluster number 
+
+    FATEntryOffset = FATRegionStart + (4 * clusterNumber);
+
+    rootDirSectors = getRootDirSectors();
+    dataSec = bpb.BPB_TotSec32 - (bpb.BPB_RsvdSecCnt + 
+        (bpb.BPB_NumFATs * bpb.BPB_FATSz32) + rootDirSectors);
+    countOfClusters = dataSec / bpb.BPB_SecPerClus;
+
+    MAXValidClusterNum = countOfClusters + 1;
+
 }
 
 
 // you can give it another name
 // fill the parameters
-void mount_fat32(FILE* fd, dentry_t *dentry)
+void mount_fat32(FILE* fd)
 {
     // 1. decode the bpb
     // read the bpb data structure
@@ -195,7 +210,7 @@ void mount_fat32(FILE* fd, dentry_t *dentry)
     fread(&bpb, sizeof(bpb_t), 1, fd); // initializing bpb here
 
     fread(&dir[0], 32, 16, fd);
-    initializeVariables(dentry);
+    initializeVariables();
     FATRegionStart = bpb.BPB_BytsPerSec * bpb.BPB_RsvdSecCnt; // this is the 0x4000
     currentDirectory = FATRegionStart + (bpb.BPB_FATSz32 * bpb.BPB_NumFATs * bpb.BPB_BytsPerSec); // this is 0x100400
 }
@@ -217,19 +232,21 @@ void executeInfo(bpb_t *bpb)
     printf("Position of Root Cluster: %d\n", bpb->BPB_RootClus);
     printf("Bytes Per Sector: %d\n", bpb->BPB_BytsPerSec);
     printf("Sectors Per Cluster: %d\n", bpb->BPB_SecPerClus);
-    int rootDirSectors = getRootDirSectors();
-    int dataSec = bpb->BPB_TotSec32 - (bpb->BPB_RsvdSecCnt + 
-        (bpb->BPB_NumFATs * bpb->BPB_FATSz32) + rootDirSectors);
-    int countOfClusters = dataSec / bpb->BPB_SecPerClus;
+    // int rootDirSectors = getRootDirSectors();
+    // int dataSec = bpb->BPB_TotSec32 - (bpb->BPB_RsvdSecCnt + 
+    //     (bpb->BPB_NumFATs * bpb->BPB_FATSz32) + rootDirSectors);
+    // int countOfClusters = dataSec / bpb->BPB_SecPerClus;
+    initializeVariables();
     printf("Total Number of Clusters in Data Region: %d\n", countOfClusters); // this might be wrong *****************************
-    // printf("Number of Entries in One FAT: %d\n", bpb); // number of entries / number of FATs // should print 512 maybe?
+    // printf("Number of Entries in One FAT: %d\n", ); // number of entries / number of FATs // should print 129152 
+    // 129152 = 1009 * 128, which is BPB_FatSz32 * 128, and 128 = 32 * 4
+    
     struct stat st;
     if (stat("fat32.img", &st) == 0)
     {
         //good
+        printf("Size of Image (in bytes): %d\n", (int)(((intmax_t)st.st_size))); // This might be wrong. Look at slide 21 of S6
     }
-    printf("Size of Image (in bytes): %d\n", (int)(((intmax_t)st.st_size)/8)); // This might be wrong. Look at slide 21 of S6
-
 }
 
 int getClusterOffset(bpb_t *bpb, int32_t clusterNumber)
@@ -283,24 +300,24 @@ void findCWD(FILE* fd, int32_t currentDirectory)
 }
 */
 
-void changeDentry(dentry_t *dentry, dentry_t *old)
+void changeDentry(dentry_t *new)
 {
     for(int i = 0; i  < 11; i++)
     {
-    dentry->DIR_Name[i] = old->DIR_Name[i];
+        dentry.DIR_Name[i] = new->DIR_Name[i];
     }
      // Name of directory retrieved
-    dentry->DIR_Attr = old->DIR_Attr;   // Attribute count of directory retreived
-    // dentry.padding_1 = old.padding_1; // DIR_NTRes, DIR_CrtTimeTenth, DIR_CrtTime, DIR_CrtDate, 
+    dentry.DIR_Attr = new->DIR_Attr;   // Attribute count of directory retreived
+    // dentry.padding_1 = new.padding_1; // DIR_NTRes, DIR_CrtTimeTenth, DIR_CrtTime, DIR_CrtDate, 
                        // DIR_LstAccDate. Since these fields are not used in
                        // Project 3, just define as a placeholder.
-    dentry->DIR_FstClusHI = old->DIR_FstClusHI;
-    // dentry.padding_2 = old.padding_2; // DIR_WrtTime, DIR_WrtDate
-    dentry->DIR_FstClusLO = old->DIR_FstClusLO;
-    dentry->DIR_FileSize = old->DIR_FileSize; // Size of directory (always 0)
+    dentry.DIR_FstClusHI = new->DIR_FstClusHI;
+    // dentry.padding_2 = new.padding_2; // DIR_WrtTime, DIR_WrtDate
+    dentry.DIR_FstClusLO = new->DIR_FstClusLO;
+    dentry.DIR_FileSize = new->DIR_FileSize; // Size of directory (always 0)
 }
 
-void executeCD(FILE *fd, tokenlist *tokens, dentry_t *dentry)
+void enterNEWCD(FILE *fd, tokenlist *tokens)
 {
     // decode the directory -> find entry
     fseek(fd, currentDirectory, SEEK_SET);
@@ -328,16 +345,45 @@ void executeCD(FILE *fd, tokenlist *tokens, dentry_t *dentry)
             if(!strncmp(tokens->items[1], directory, strlen(tokens->items[1])))
             {
                 printf("YOU HAVE FOUND THE DIRECTORY TO GO INTO\n");
-                initializeVariables(&dir[i]);
+                changeDentry(&dir[i]);
+                initializeVariables();
                 // getDirectoryClusterNumber(2, &dir[i]);
                 // dentry = dir[i]; // found new directory so changing dentry (dentry = current dentry)
-                changeDentry(dentry, &dir[i]);
+                // add new directory to prompt
+                // add "/" then name
+                prompt[sizeOfPrompt] = '/';
+                sizeOfPrompt++;
+                for(int j = 0; j < strlen(tokens->items[1]); j++)
+                {
+                    prompt[j+sizeOfPrompt] = dir[i].DIR_Name[j];
+                }
+                sizeOfPrompt += strlen(tokens->items[1]);
                 break;
             }
         }
         i++;
     }
     printf("\n");
+}
+
+void executeCD(FILE *fd, tokenlist *tokens)
+{
+    if(strcmp(tokens->items[1], ".."))
+    {
+        // not .., so enter new
+        enterNEWCD(fd, tokens);
+    }
+    else
+    {
+        for(int i = sizeOfPrompt-1; i >= 0; i--)
+        {
+            if(prompt[i] == '/')
+            {
+                sizeOfPrompt = i;
+                break;
+            }
+        }
+    }
 }
 
 
@@ -350,21 +396,26 @@ Bing notes
 - outer for loop for when the next thing is not 00
 - Another function that is the next cluster number for the current cluster number
 */
-void executeLS(FILE *fd, dentry_t *dentry)
-{
-    fseek(fd, currentDirectory, SEEK_SET);
+//
 
-    int i = 0;
-    
-    //need to add a while loop here for the flag
-    for(i; i < 16; i++) // cluster size/entry size
+
+// this is printing the data region information
+int readOneCluster(FILE *fd, uint32_t address)
+{
+    fseek(fd, address, SEEK_SET);
+
+    for(int i = 0; i < 16; i++) // cluster size/entry size
     {
         fread(&dir[i], 32, 1, fd); // 32 because of FAT32
 
         // no more directory entries or files to read
         //change this to a flag not a break;
-        if (dir[i].DIR_Attr == 0x00)
-            break; //if you don't break you need to go to next cluster chain
+        if (dir[i].DIR_Attr == 0x00) // || dir[i].DIR_Name[0] == 0xE5
+        {
+            // break; //if you don't break you need to go to next cluster chain
+            // done = 1;
+            return 0;
+        }
 
         if(dir[i].DIR_Attr == 0x1 || dir[i].DIR_Attr == 0x10 || dir[i].DIR_Attr == 0x20)
         {
@@ -373,9 +424,74 @@ void executeLS(FILE *fd, dentry_t *dentry)
             memset(directory, '\0', 11);
             memcpy(directory, dir[i].DIR_Name, 11);
             printf("%s", directory);
+            // printf("%d\t", getDirectoryClusterNumber(0, &dir[i]));
+            // int clusNumber = ((dir[i].DIR_FstClusHI << 16) + dir[i].DIR_FstClusLO);
+            // printf("%d\t", clusNumber); // print cluster number
+            // printf("%d\n", FATRegionStart + (4 * clusNumber));
+
         }
-        // i++;
     }
+    return 1;
+}
+
+
+void traverseClusterChain(FILE* fd, uint32_t startAddress)
+{
+    // i know im not at the end so i do countOfClusters + 1 ??? 0x4000 + 4 bytes * 434
+    // then check if it is a valid clusnum by checking if it is within the range 0x00002 to MAX
+    // MAX is countOfClusters + 1
+
+    // uint32_t currentAddress = startAddress;
+
+    readOneCluster(fd, startAddress);
+
+    // while(1)
+    // {
+    //     if(readOneCluster(fd, currentAddress) == 0)
+    //         break;
+
+    //     uint32_t nextCluster;
+    //     fseek(fd, FATEntryOffset, SEEK_SET);
+    //     printf("fseek no seg fault\n");
+    //     fread(&nextCluster, 32, 1, fd);
+    //     printf("fread no seg fault\n");
+
+    //     // if(nextCluster >= MAXValidClusterNum)
+    //     // {
+    //     //     break; // hit the end, no more to print, invalid number
+    //     // }
+
+    //     // if(nextCluster >= 0x0FFFFFF8 && nextCluster <= 0x0FFFFFFF)
+    //     //     break;
+
+    //     currentAddress = &nextCluster; // move to next cluster
+    //     currentAddress *= 32;
+    //     printf("address is %d", currentAddress);
+
+    // }
+
+}
+
+
+void executeLS(FILE *fd)
+{
+    traverseClusterChain(fd, currentDirectory);
+    // fseek(fd, currentDirectory, SEEK_SET);
+
+    // int i = 0;
+    
+    // //need to add a while loop here for the flag
+    // int done = 0;
+    // while(!done)
+    // {
+    //     for(i; i < 16; i++) // cluster size/entry size
+    //     {
+    //     }
+    //     if(!done)
+    //     {
+    //         // fseek(fd, currentDirectory, SEEK_SET);
+    //     }
+    // }
     printf("\n");
 
 
@@ -410,18 +526,18 @@ void executeLS(FILE *fd, dentry_t *dentry)
 
 // you can give it another name
 // fill the parameters
-void main_process(FILE* fd, const char* FILENAME, dentry_t *dentry)
+void main_process(FILE* fd, const char* FILENAME)
 {
     int done = 0;
     
     while (!done)
     {
         printf("%s", FILENAME); // need to change this
-        // for(int i = 0; i < sizeOfCWD; i++)
-        // {
-        //     printf("%c", cwd[i]);
+        for(int i = 0; i < sizeOfPrompt; i++)
+        {
+            printf("%c", prompt[i]);
 
-        // }
+        }
         printf("> ");
 
         char *input = get_input();
@@ -440,11 +556,11 @@ void main_process(FILE* fd, const char* FILENAME, dentry_t *dentry)
             }
             else if(strcmp(tokens->items[0], "ls") == 0)
             {
-                executeLS(fd, dentry);
+                executeLS(fd);
             }
             else if(strcmp(tokens->items[0], "cd") == 0)
             {
-                executeCD(fd, tokens, dentry);
+                executeCD(fd, tokens);
             }
         }
 
@@ -466,6 +582,7 @@ void main_process(FILE* fd, const char* FILENAME, dentry_t *dentry)
 
 int main(int argc, char const *argv[]) //image file 
 {
+    sizeOfPrompt = 0;
     // 1. open the fat32.img - original code was open the file in read only
     // fd = open(argv[1], O_RDWR); // read and write
     FILE* fd = fopen(argv[1], "rw");
@@ -476,8 +593,8 @@ int main(int argc, char const *argv[]) //image file
 
     //may be in wrong place in main
     uint32_t offset = 0x100420;
-    dentry_t *dentry = encode_dir_entry(fd, offset); 
-    if(dentry == NULL)
+    dentry_t *dentryDecoded = encode_dir_entry(fd, offset); 
+    if(dentryDecoded == NULL)
     {
         printf("file name passed in not found, exiting program\n");
         return 1;
@@ -487,16 +604,16 @@ int main(int argc, char const *argv[]) //image file
     // mount: decode BPB --> locate root directory --> decode the directory
     // need to set cwd 
     // prompt format = file_name/path/to/cwd>
-    mount_fat32(fd, dentry);   
+    mount_fat32(fd);   
     // setenv("USER", argv[1], 1);
     const char* FILENAME = argv[1];
 
     // 3. main procees
-    main_process(fd, FILENAME, dentry);
+    main_process(fd, FILENAME);
 
     // 4. close all opened files
 
-    free(dentry);
+    free(dentryDecoded);
     // close(fd);
 
     // 5. close the fat32.img
