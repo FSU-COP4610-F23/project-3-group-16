@@ -1,6 +1,8 @@
 /*
 Questions:
-- offset?
+- what is the offset for lsof?
+- why is the path not storing corectly when we open a file
+
 - how do you find the next cluster chain and how do you know where the file ends?
     if it is not a valid clusterNumber then it is the end of the chain(file), section 3.5 of spec, 0x000002 to MAX
     MAX = max valid cluster number (countOfClusters + 1)
@@ -54,8 +56,6 @@ typedef struct __attribute__((packed)) BPB
     // please declare them.
     // char pdding[18];
     // char BS_FilSysType[8];
-    // //488
-    // //4
 
     uint32_t BPB_FATSz32;
     uint16_t BPB_ExtFlags;
@@ -82,6 +82,16 @@ typedef struct __attribute__((packed)) directory_entry
     uint32_t DIR_FileSize; // Size of directory (always 0)
 } dentry_t;
 
+typedef struct fileInformation
+{
+    int index; // index does not change once established
+    char name[11];
+    char mode[2];
+    uint32_t offset;
+    char path[256];
+    int pathSize;
+} fileInfo;
+
 // VARIABLES 
 bpb_t bpb; // instance of the struct
 dentry_t dir[16]; // 16 is arbitrary and magic number
@@ -96,6 +106,7 @@ uint32_t MAXValidClusterNum;
 int rootDirSectors;
 int dataSec;
 int countOfClusters;
+fileInfo openedFiles[10];
 
 
 // FUNCTIONS
@@ -398,9 +409,49 @@ Bing notes
 */
 //
 
+void openAndStoreFile(FILE* fd, uint32_t address, tokenlist *tokens)
+{
+    printf("inside openAndStoreFile\n");
+    // find open position in openedFiles array
+    for(int i = 0; i < 10; i++)
+    {
+        if(openedFiles[i].index == -1)
+        {
+            printf("inserting file now\n");
+            // found available spot
+            openedFiles[i].index = i;
+            printf("seeing if index saved: %d\n", openedFiles[i].index);
+            for(int j = 0; j < strlen(tokens->items[1]); j++)
+            {
+                openedFiles[i].name[j] = tokens->items[1][j];
+            }
+            // start at 1 because don't want to save the "-"
+            for(int j = 1; j < strlen(tokens->items[2]); j++)
+            {
+                openedFiles[i].mode[j-1] = tokens->items[2][j];
+            }
+            openedFiles[i].offset  = 0;
+            openedFiles[i].pathSize = sizeOfPrompt;
+            for(int j = 0; j < openedFiles[i].pathSize; j++)
+            {
+                openedFiles[i].path[j] = prompt[j];
+            }
+            openedFiles[i].path[sizeOfPrompt] = '\0';
+            
+            break; // leave for loopyloop
+        }
+    }
+}
 
-// this is printing the data region information
-int readOneCluster(FILE *fd, uint32_t address)
+// this is going through the data region information
+// toDo: 
+// 0. LS
+// 1. CD
+// 2. open (file)
+// 3. close (file)
+// 4. lseek (file, changes offset)
+// 5. read (file)
+int readOneCluster(FILE *fd, uint32_t address, int toDo, tokenlist *tokens)
 {
     fseek(fd, address, SEEK_SET);
 
@@ -420,22 +471,42 @@ int readOneCluster(FILE *fd, uint32_t address)
         if(dir[i].DIR_Attr == 0x1 || dir[i].DIR_Attr == 0x10 || dir[i].DIR_Attr == 0x20)
         {
             // 11 becuase there are 11 hexedecimal places for the directory/file name
-            char *directory = malloc(11);
-            memset(directory, '\0', 11);
-            memcpy(directory, dir[i].DIR_Name, 11);
-            printf("%s", directory);
-            // printf("%d\t", getDirectoryClusterNumber(0, &dir[i]));
-            // int clusNumber = ((dir[i].DIR_FstClusHI << 16) + dir[i].DIR_FstClusLO);
-            // printf("%d\t", clusNumber); // print cluster number
-            // printf("%d\n", FATRegionStart + (4 * clusNumber));
+            char *directoryContent = malloc(11);
+            memset(directoryContent, '\0', 11);
+            memcpy(directoryContent, dir[i].DIR_Name, 11);
 
+            if(toDo == 0)
+            { 
+                printf("%s", directoryContent);
+                // printf("%d\t", getDirectoryClusterNumber(0, &dir[i]));
+                // int clusNumber = ((dir[i].DIR_FstClusHI << 16) + dir[i].DIR_FstClusLO);
+                // printf("%d\t", clusNumber); // print cluster number
+                // printf("%d\n", FATRegionStart + (4 * clusNumber));
+            }
+            else if(toDo == 2)
+            {
+                if(dir[i].DIR_Attr != 0x10) // not a directory so could be file we are looking to open
+                {
+                    if(!strncmp(tokens->items[1], directoryContent, strlen(tokens->items[1])))
+                    {
+                        printf("YOU HAVE FOUND THE FILE TO OPEN\n");
+                        // already know the command line arguments are good when you reach here
+                        // function that opens and stores the opened file
+                        openAndStoreFile(fd, address, tokens);
+                    }
+                }
+            }
+            else if(toDo == 4)
+            {
+
+            }
         }
     }
     return 1;
 }
 
 
-void traverseClusterChain(FILE* fd, uint32_t startAddress)
+void traverseClusterChain(FILE* fd, uint32_t startAddress, tokenlist *tokens)
 {
     // i know im not at the end so i do countOfClusters + 1 ??? 0x4000 + 4 bytes * 434
     // then check if it is a valid clusnum by checking if it is within the range 0x00002 to MAX
@@ -443,7 +514,7 @@ void traverseClusterChain(FILE* fd, uint32_t startAddress)
 
     // uint32_t currentAddress = startAddress;
 
-    readOneCluster(fd, startAddress);
+    readOneCluster(fd, startAddress, 0, tokens);
 
     // while(1)
     // {
@@ -473,9 +544,9 @@ void traverseClusterChain(FILE* fd, uint32_t startAddress)
 }
 
 
-void executeLS(FILE *fd)
+void executeLS(FILE *fd, tokenlist *tokens)
 {
-    traverseClusterChain(fd, currentDirectory);
+    traverseClusterChain(fd, currentDirectory, tokens);
     // fseek(fd, currentDirectory, SEEK_SET);
 
     // int i = 0;
@@ -524,10 +595,98 @@ void executeLS(FILE *fd)
 
 }
 
+void executeOpen(FILE* fd, tokenlist *tokens)
+{
+    // legit just open a file and print "opened LONGFILE"
+    // look for file, then open
+    // file name and access level is passed in through tokens 
+
+    if(tokens->size != 3)
+    {
+        printf("Wrong number of command line arguments, file not opened\n");
+    }
+    else
+    {
+        //check if already open
+        // *code*
+        // if invalid flag passed in
+        if((!strcmp(tokens->items[2], "-w")) || (!strcmp(tokens->items[2], "-r")) || 
+            (!strcmp(tokens->items[2], "-rw")) || (!strcmp(tokens->items[2], "-wr")))
+        {
+            // good
+            readOneCluster(fd, currentDirectory, 2, tokens);
+        }
+        else
+        {
+            printf("Passed in flag incorrect\n");
+        }
+    }
+}
+
+void executeLSOF(FILE* fd)
+{
+    printf("INDEX\t\tNAME\t\tMODE\t\tOFFSET\t\tPATH\n");
+    // go through open file and print
+    // find open position in openedFiles array
+    for(int i = 0; i < 10; i++)
+    {
+        if(openedFiles[i].index != -1)
+        {
+            // found available spot
+            printf("%-12d\t", openedFiles[i].index);
+            printf("%-12s\t", openedFiles[i].name);
+            printf("%-12s\t", openedFiles[i].mode);
+            printf("%-12d\t", openedFiles[i].offset);
+            printf("%s", openedFiles[i].path);
+            // for(int j = 0; j < openedFiles[i].pathSize; j++)
+            // {
+            //     printf("%c", openedFiles[i].path[j]);
+            // }
+            printf("\n");
+        }
+    }
+}
+
+void executeClose(FILE* fd, tokenlist *tokens)
+{
+    for(int i = 0; i < 10; i++)
+    {
+        // current entry is opened file
+        if(openedFiles[i].index != -1) 
+        {
+            // checking the name
+            if(!strncmp(openedFiles[i].name, tokens->items[1], sizeof(tokens->items[1])))
+            {
+                openedFiles[i].name[0] = '\0';
+                // also name could be longer (like found cat1 open but want to close cat)
+                // Found the open file but maybe not correct directory
+                // if(!strncmp(openedFiles[i].path, prompt, sizeOfPrompt))
+                // {d
+                    // path matches 
+                    openedFiles[i].index = -1;
+                // }
+                
+            }
+        }
+    }
+}
+
+void executeLSEEK(FILE* fd, tokenlist *tokens)
+{
+    // see if file is open
+    readOneCluster(fd, currentDirectory, 5, tokens);
+    // change off set
+}
+
 // you can give it another name
 // fill the parameters
 void main_process(FILE* fd, const char* FILENAME)
 {
+    for(int i = 0; i < 10; i++)
+    {
+        openedFiles[i].index = -1;
+    }
+
     int done = 0;
     
     while (!done)
@@ -536,12 +695,11 @@ void main_process(FILE* fd, const char* FILENAME)
         for(int i = 0; i < sizeOfPrompt; i++)
         {
             printf("%c", prompt[i]);
-
         }
         printf("> ");
 
         char *input = get_input();
-		tokenlist *tokens = get_tokens(input); // tokanize
+		tokenlist *tokens = get_tokens(input); // tokenize
 
         // If no entry
 		if(tokens->size != 0) //if no input, move on and ask for input again 
@@ -556,11 +714,27 @@ void main_process(FILE* fd, const char* FILENAME)
             }
             else if(strcmp(tokens->items[0], "ls") == 0)
             {
-                executeLS(fd);
+                executeLS(fd, tokens);
             }
             else if(strcmp(tokens->items[0], "cd") == 0)
             {
                 executeCD(fd, tokens);
+            }
+            else if(strcmp(tokens->items[0], "open") == 0)
+            {
+                executeOpen(fd, tokens);
+            }
+            else if(strcmp(tokens->items[0], "close") == 0)
+            {
+                executeClose(fd, tokens);
+            }
+            else if(strcmp(tokens->items[0], "lsof") == 0)
+            {
+                executeLSOF(fd);
+            }
+            else if(strcmp(tokens->items[0], "lseek") == 0)
+            {
+                executeLSEEK(fd, tokens);
             }
         }
 
