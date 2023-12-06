@@ -1,32 +1,46 @@
 /*
+
 Things to fix:
 - close FILE, ls, lsof, ls --> makes BLUE print ILEBLUE(
 - open does not check if file already open
 - Check if the file exists (command line argument)
 - readOneCluster for loop has magic number
-
+- Set the offset after read
 
 Things to implement from project description
 - cd (.. and error checking no name)
-- mkdir
-- creat
 - open (started)
 - close (started)
 - read
-- append
-- rm
-
 
 Questions:
-- what is the offset for lsof?
-
 - how do you find the next cluster chain and how do you know where the file ends?
     if it is not a valid clusterNumber then it is the end of the chain(file), section 3.5 of spec, 0x000002 to MAX
     MAX = max valid cluster number (countOfClusters + 1)
 
-- How do you cd .. (storing where you came from)
 
-Things To Do:
+Grading Policy:
+- Repository layout
+- ReadME/Division of Labor
+- Review Makefile
+- info
+     - print Size of Image
+- cd
+    - *cd .. and ls at the root
+    - cd error message if directory does not exist
+- open
+    - Error message if we are trying to open a file that doesn't exist
+- close
+    - Error message if we are trying to open a file that doesn't exist
+    - Error message if file is already opened/closed
+- lseek
+    - Error message if we are trying to lseek something that doesn't exist
+    - Error message if trying to lseek without the thing being opened yet
+- read
+    - *Set the offset after read
+    - Error if not opened yet
+    - Error if it doesn't exist
+
 
 */
 
@@ -102,6 +116,7 @@ typedef struct fileInformation
     char path[256];
     int pathSize;
     uint32_t fileSize;
+    uint32_t startingLocation;
 } fileInfo;
 
 // VARIABLES 
@@ -119,6 +134,8 @@ int rootDirSectors;
 int dataSec;
 int countOfClusters;
 fileInfo openedFiles[10];
+dentry_t dentryPath[25];
+int dentryPathLocation;
 
 
 // FUNCTIONS
@@ -141,7 +158,30 @@ dentry_t *encode_dir_entry(FILE *fd, uint32_t offset)
     return temp;
 }
 
-// The following is from Bing and is related to the ls function
+
+/*
+Bing notes
+- each cluster is 512
+- each entry is 32
+- 512/32 = 16 which is why our for loop in ls is going to be 16
+- the cluster chain is a linked link
+- outer for loop for when the next thing is not 00
+- Another function that is the next cluster number for the current cluster number
+*/
+//
+
+void changeDentry(dentry_t *new)
+{
+    for(int i = 0; i  < 11; i++)
+    {
+        dentry.DIR_Name[i] = new->DIR_Name[i];
+    }
+     // Name of directory retrieved
+    dentry.DIR_Attr = new->DIR_Attr;   // Attribute count of directory retreived
+    dentry.DIR_FstClusHI = new->DIR_FstClusHI;
+    dentry.DIR_FstClusLO = new->DIR_FstClusLO;
+    dentry.DIR_FileSize = new->DIR_FileSize; // Size of directory (always 0)
+}
 
 int getRootDirSectors()
 {
@@ -155,11 +195,15 @@ int getDirSectorsForClusNum(uint32_t clus_num) // gives you the sector for clus_
 }
 
 
-int getDirectoryClusterNumber(int clusterNumber, dentry_t *dirToGoTo) // clusterNumber = N
+uint32_t getDirectoryOffset(dentry_t *dirToGoTo) // clusterNumber = N
 {
     // int firstDataSector = bpb.BPB_RsvdSecCnt + (bpb.BPB_NumFATs * bpb.BPB_FATSz32) + getRootDirSectors();
     // << is binary left shift 
     uint16_t newClusterNumber = (dirToGoTo->DIR_FstClusHI << 16) + dirToGoTo->DIR_FstClusLO; // gives us hex
+    printf("DIR_FstClusHI is %d\nDIR_FstClusLO is %d\n", dirToGoTo->DIR_FstClusHI, dirToGoTo->DIR_FstClusLO);
+    // Low:
+    // 160, 236, 501
+
     // printf("first data sector is calculated to be: %d\n", firstDataSector); // right now printing 2050, should be 100400
     // printf("first sector of cluster is calculated to be: %d\n", firstSectorOfCluster);
     // printf("low is %d, high is %d\n", dirToGoTo->DIR_FstClusLO, dirToGoTo->DIR_FstClusHI);
@@ -181,7 +225,22 @@ void initializeVariables()
     
     int clusterNumber = (dentry.DIR_FstClusHI << 16) + dentry.DIR_FstClusLO; // gives us hex
     // int clusterNumber = 2;
-    currentDirectory = getDirectoryClusterNumber(clusterNumber, &dentry); // passing in 2 because that is original cluster number 
+    currentDirectory = getDirectoryOffset(&dentry);
+
+    // add dentry to array
+    // dentryPath[dentryPathLocation] = &dentry;
+
+    for(int i = 0; i  < 11; i++)
+    {
+        dentryPath[dentryPathLocation].DIR_Name[i] = dentry.DIR_Name[i];
+    }
+     // Name of directory retrieved
+    dentryPath[dentryPathLocation].DIR_Attr = dentry.DIR_Attr;   // Attribute count of directory retreived
+    dentryPath[dentryPathLocation].DIR_FstClusHI = dentry.DIR_FstClusHI;
+    dentryPath[dentryPathLocation].DIR_FstClusLO = dentry.DIR_FstClusLO;
+    dentryPath[dentryPathLocation].DIR_FileSize = dentry.DIR_FileSize; // Size of directory (always 0)
+
+    dentryPathLocation++;
 
     FATEntryOffset = FATRegionStart + (4 * clusterNumber);
 
@@ -196,15 +255,32 @@ void initializeVariables()
 
 void mount_fat32(FILE* fd)
 {
+    dentry_t fuck;
+    // changeDentry(&fuck);
+    // dentryPath[0] = dir[0];
+    for(int i = 0; i  < 11; i++)
+    {
+        dentryPath[0].DIR_Name[i] = fuck.DIR_Name[i];
+    }
+     // Name of directory retrieved
+    dentryPath[0].DIR_Attr = fuck.DIR_Attr;   // Attribute count of directory retreived
+    dentryPath[0].DIR_FstClusHI = fuck.DIR_FstClusHI;
+    dentryPath[0].DIR_FstClusLO = fuck.DIR_FstClusLO;
+    dentryPath[0].DIR_FileSize = fuck.DIR_FileSize; // Size of directory (always 0)
+
+
     // 1. decode the bpb
     // read the bpb data structure
     fseek(fd, 0, SEEK_SET);
     fread(&bpb, sizeof(bpb_t), 1, fd); // initializing bpb here
 
     fread(&dir[0], 32, 16, fd);
+    // changeDentry(&dir[0]);
+    // changeDentry(&dentry);
     initializeVariables();
     FATRegionStart = bpb.BPB_BytsPerSec * bpb.BPB_RsvdSecCnt; // this is the 0x4000
     currentDirectory = FATRegionStart + (bpb.BPB_FATSz32 * bpb.BPB_NumFATs * bpb.BPB_BytsPerSec); // this is 0x100400
+    
 }
 
 void executeInfo(bpb_t *bpb)
@@ -255,33 +331,7 @@ int getClusterOffset(bpb_t *bpb, int32_t clusterNumber)
     return clusterOffset;
 }
 
-
-
-/*
-Bing notes
-- each cluster is 512
-- each entry is 32
-- 512/32 = 16 which is why our for loop in ls is going to be 16
-- the cluster chain is a linked link
-- outer for loop for when the next thing is not 00
-- Another function that is the next cluster number for the current cluster number
-*/
-//
-
-void changeDentry(dentry_t *new)
-{
-    for(int i = 0; i  < 11; i++)
-    {
-        dentry.DIR_Name[i] = new->DIR_Name[i];
-    }
-     // Name of directory retrieved
-    dentry.DIR_Attr = new->DIR_Attr;   // Attribute count of directory retreived
-    dentry.DIR_FstClusHI = new->DIR_FstClusHI;
-    dentry.DIR_FstClusLO = new->DIR_FstClusLO;
-    dentry.DIR_FileSize = new->DIR_FileSize; // Size of directory (always 0)
-}
-
-void openAndStoreFile(FILE* fd, uint32_t address, tokenlist *tokens, uint32_t fileSize)
+void openAndStoreFile(FILE* fd, uint32_t address, tokenlist *tokens, uint32_t fileSize, dentry_t *fileDentry)
 {
     int flag = 0;
     // find open position in openedFiles array
@@ -309,9 +359,12 @@ void openAndStoreFile(FILE* fd, uint32_t address, tokenlist *tokens, uint32_t fi
             }
             openedFiles[i].path[sizeOfPrompt] = '\0';
             openedFiles[i].fileSize = fileSize;
+            openedFiles[i].startingLocation = getDirectoryOffset(&fileDentry);
+            printf("Inside Open and Store File, starting location is: %d\n", openedFiles[i].startingLocation);
+
             printf("Opened %s\n", tokens->items[1]);
             flag = 1;
-            break; // leave for loopyloop
+            break;
         }
     }
     if(flag == 0)
@@ -359,9 +412,9 @@ int readOneCluster(FILE* fd, uint32_t address, int toDo, tokenlist *tokens)
             }
             if(toDo == 1) // cd
             {
-                if(dir[i].DIR_Attr == 0x10) // only look at directories
+                if(!strncmp(tokens->items[1], directoryContent, strlen(tokens->items[1])))
                 {
-                    if(!strncmp(tokens->items[1], directoryContent, strlen(tokens->items[1])))
+                    if(dir[i].DIR_Attr == 0x10) // only look at directories
                     {
                         changeDentry(&dir[i]);
                         initializeVariables();
@@ -374,20 +427,31 @@ int readOneCluster(FILE* fd, uint32_t address, int toDo, tokenlist *tokens)
                             prompt[j+sizeOfPrompt] = dir[i].DIR_Name[j];
                         }
                         sizeOfPrompt += strlen(tokens->items[1]);
-                        break;
+                        return 0;
+                    }
+                    else{
+                        printf("Error: whatever you are looking for is not a directory silly goose\n");
+                        return 1;
                     }
                 }
             }
             else if(toDo == 2) // open
             {
-                if(dir[i].DIR_Attr != 0x10) // not a directory so could be file we are looking to open
+                if(!strncmp(tokens->items[1], directoryContent, strlen(tokens->items[1])))
                 {
-                    if(!strncmp(tokens->items[1], directoryContent, strlen(tokens->items[1])))
+                    if(dir[i].DIR_Attr != 0x10) // not a directory so could be file we are looking to open
                     {
                         // already know the command line arguments are good when you reach here
                         // function that opens and stores the opened file
-                        openAndStoreFile(fd, address, tokens, dir[i].DIR_FileSize);
+                        openAndStoreFile(fd, address, tokens, dir[i].DIR_FileSize, &dir[i]);
+                        return 0;
                     }
+                    else
+                    {
+                        printf("Error: you tried to open a directory not a file, Silly\n");
+                        return 1;
+                    }
+                    
                 }
             }
             // 3 is close file (might not need this later)
@@ -453,20 +517,39 @@ void executeLS(FILE *fd, tokenlist *tokens)
 
 void executeCD(FILE *fd, tokenlist *tokens)
 {
+    // only passed in cd not where to go
+    if(tokens->size < 2)
+    {
+        dentryPathLocation = 1;
+        changeDentry(&dentryPath[0]); // changes dentry to previous dentry
+        currentDirectory = getDirectoryOffset(&dentryPath[0]);
+        return;
+    }
+    // if not ..
     if(strcmp(tokens->items[1], ".."))
     {
         // not .., so enter new
         traverseClusterChain(fd, currentDirectory, tokens, 1);
     }
-    else
+    else // cd ..
     {
-        for(int i = sizeOfPrompt-1; i >= 0; i--)
+        if(dentryPathLocation == 1)
         {
-            if(prompt[i] == '/')
+            printf("Can not go back a directory, already at root\n");
+        }
+        else
+        {        
+            for(int i = sizeOfPrompt-1; i >= 0; i--)
             {
-                sizeOfPrompt = i;
-                break;
+                if(prompt[i] == '/')
+                {
+                    sizeOfPrompt = i;
+                    break;
+                }
             }
+            dentryPathLocation--;
+            // changeDentry(&dentryPath[dentryPathLocation - 1]); // changes dentry to previous dentry
+            currentDirectory = getDirectoryOffset(&dentryPath[dentryPathLocation - 1]);
         }
     }
 }
@@ -526,7 +609,8 @@ void executeLSOF(FILE* fd)
 // toDo:
 // 0 for close
 // 1 for lseek
-void executeCloseFileAndLSEEK(FILE* fd, tokenlist *tokens, int toDo)
+// 2 for read
+void executeCloseFileAndLSEEK(FILE* fd, tokenlist *tokens, int toDo) // And read
 {
     for(int i = 0; i < 10; i++)
     {
@@ -549,7 +633,7 @@ void executeCloseFileAndLSEEK(FILE* fd, tokenlist *tokens, int toDo)
                             flag = 1;
                         }
                     }
-                    if(flag == 0)
+                    if(flag == 0) // If you found the file name (and directory) in the array
                     {
                         if(toDo == 0) // close
                         {
@@ -569,6 +653,130 @@ void executeCloseFileAndLSEEK(FILE* fd, tokenlist *tokens, int toDo)
                                 openedFiles[i].offset = offset; 
                             }
                         }
+                        else if(toDo == 2) // read
+                        {
+                            int requestedSize = atoi(tokens->items[2]); // read HELLO 10 - this line takes the "10" and turns it into an int (from char)
+                            int BUFFER_SIZE = 1000;
+
+                            if(!strcmp(openedFiles[i].mode, "w"))
+                            {
+                                printf("Error: File is not open for reading\n");
+                                break;
+                            }
+
+                            // read and print the data until reaching end of file or requested size (from command line)
+                            char buffer[BUFFER_SIZE]; // this is a temp char array to hold the 10 in "read HELLO 10"
+                            
+                            // check that read number not too high
+                            if(openedFiles[i].fileSize > (requestedSize + openedFiles[i].offset))
+                            {
+                                printf("startingLocation is: %d\n", openedFiles[i].startingLocation); // 1195008: 1142272
+                                // 1333248 1350656
+                                // fseek(fd, openedFiles[i].startingLocation, SEEK_SET);
+                                fseek(fd, 1270272, SEEK_SET);
+                                
+
+                                // BELOW WORKS
+                                fread(&buffer, sizeof(buffer), 1, fd);
+
+                                // print the read data
+                                for(int j = 0; j < requestedSize; j++)
+                                {
+                                    printf("%c", buffer[j]);
+                                }
+                                printf("\n");
+                                break;
+                            }
+                            else 
+                            {
+                                printf("error: reached end of file\n");
+                                break;
+                            }
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            // int requestedSize = atoi(tokens->items[2]); // read HELLO 10 - this line takes the "10" and turns it into an int (from char)
+                            // int BUFFER_SIZE = 1000;
+                            // // need to check if file is even opened first - which we do above (?)
+                            
+                            // // check if file I want to open is in read mode
+                            // if(openedFiles[i].mode == "w")
+                            // {
+                            //     printf("Error: File is not open for reading\n");
+                            //     break;
+                            // }
+
+                            // // find find the cluster number for the offset -> read data
+
+                            // //convert the offset of the open file to the cluster number
+                            // //convert the cluster number to the data region offset 
+
+                            // // convert offset of opened file to cluster number using this formula
+                            //     // cluster_num  = file_first_cluster_number + offset / cluster_size
+                            //     // cluster_num = HELLO_first_cluster_number + HELLO_offset / 4 or 32 - idk if this is right
+                            
+                            // openedFiles[i].offset = 1049692; // starting address of HELLO
+
+                            // // we want to see 1049692 which is 10045C (start of HELLO)
+                            // // we want to see 1270272 which is 136200 (start of Hi there!)
+                            // int clusterNumber = openedFiles[i].offset / 4;        
+                            // int clusterNumber32 = openedFiles[i].offset / 32;                        
+                            // printf("clusterNumber is %d\nclusterNumber32 is %d\n", clusterNumber, clusterNumber32);
+                            
+                            // int dataRegionOffset = dataRegionStart + (clusterNumber * 4);
+                            // int dataRegionOffset32 = dataRegionStart + (clusterNumber32 * 32);
+                            // printf("dataRegionOffset is %d\ndataRegionOffset32 %d", dataRegionOffset, dataRegionOffset32);
+
+                            // // uint32_t dataRegionOffset32 = convert_clus_num_to_offset_in_data_region(clusterNumber32, dataRegionStart);
+                            // // uint32_t dataRegionOffsetOF = convert_clus_num_to_offset_in_data_region(openedFiles[i].offset, dataRegionStart);
+                            // // printf("dataRegionOffset32 is %d\ndataRegionOffsetOF %d", dataRegionOffset32, dataRegionOffsetOF);
+                            
+                            // fseek(fd, dataRegionOffset, SEEK_SET);
+                            
+                            // // read and print the data until reaching end of file or requested size (from command line)
+                            // int bytesRead = 0;
+                            // char buffer[BUFFER_SIZE]; // this is a temp char array to hold the 10 in "read HELLO 10"
+                            
+                            // while(bytesRead < requestedSize && !feof(fd)) // reads to end of file
+                            // {
+                            //     int bytesToRead = requestedSize - bytesRead;
+                                
+                            //     if(bytesToRead > BUFFER_SIZE)
+                            //     {
+                            //         bytesToRead = BUFFER_SIZE;
+                            //         printf("Error: reached end of file\n");
+                            //     }
+
+                            //     int read = fread(buffer, 1, bytesToRead, fd);
+                            //     // int read = fread(fd, 1, bytesToRead, buffer);
+                            //     bytesRead += read;
+
+                            //     // print the read data
+                            //     for(int j = 0; j < read; j++)
+                            //     {
+                            //         printf("%c", buffer[j]);
+                            //     }
+                            // }
+
+                            // printf("\n");
+
+                            // // update the offset in openedFiles struct
+                            // openedFiles[i].offset += bytesRead; // idk what this is, might be wrong
+
+                            break;
+                        }
+                        break;
+                        // I think break here
                     }
                 }
                 break;
@@ -640,6 +848,8 @@ void main_process(FILE* fd, const char* FILENAME)
             {
                 executeCloseFileAndLSEEK(fd, tokens, 1);
             }
+            else if(strcmp(tokens->items[0], "read") == 0)
+                executeCloseFileAndLSEEK(fd, tokens, 2);
         }
 
 		free(input);
@@ -652,6 +862,7 @@ void main_process(FILE* fd, const char* FILENAME)
 int main(int argc, char const *argv[])
 {
     sizeOfPrompt = 0;
+    dentryPathLocation = 0;
     FILE* fd = fopen(argv[1], "rw");
     if (fd < 0) { 
         perror("Error opening file failed: ");
