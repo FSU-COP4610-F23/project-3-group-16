@@ -157,7 +157,8 @@ int getDirSectorsForClusNum(uint32_t clus_num) // gives you the sector for clus_
 
 uint32_t getDirectoryOffset(dentry_t *dirToGoTo) // clusterNumber = N
 {
-    uint16_t newClusterNumber = (dirToGoTo->DIR_FstClusHI << 16) + dirToGoTo->DIR_FstClusLO; // gives us hex
+    printf("Dir To Go To name: %s\n", dirToGoTo->DIR_Name);
+    uint32_t newClusterNumber = (dirToGoTo->DIR_FstClusHI << 16) + dirToGoTo->DIR_FstClusLO; // gives us hex
     uint32_t newAddress = dataRegionStart + (newClusterNumber - 2) * bpb.BPB_BytsPerSec;
     return newAddress;
     // newClusterNumber gets you to a place that tells you how many fiels and directories are in the new directory
@@ -211,9 +212,11 @@ void mount_fat32(FILE* fd)
     fseek(fd, 0, SEEK_SET);
     fread(&bpb, sizeof(bpb_t), 1, fd); // initializing bpb here
 
-    fread(&dir[0], 32, ENTRIESINDIR, fd);
+    // fread(&dir[0], 32, ENTRIESINDIR, fd);
     initializeVariables();
     FATRegionStart = bpb.BPB_BytsPerSec * bpb.BPB_RsvdSecCnt; // this is the 0x4000
+    // currentDirectory = FATRegionStart + (bpb.BPB_FATSz32 * bpb.BPB_NumFATs * bpb.BPB_BytsPerSec) + ((rootclusternumber - 2) * cluster size); // this is 0x100400
+
     currentDirectory = FATRegionStart + (bpb.BPB_FATSz32 * bpb.BPB_NumFATs * bpb.BPB_BytsPerSec); // this is 0x100400
 }
 
@@ -281,7 +284,7 @@ void openAndStoreFile(FILE* fd, uint32_t address, tokenlist *tokens, uint32_t fi
             openedFiles[i].path[sizeOfPrompt] = '\0';
             openedFiles[i].fileSize = fileSize;
             openedFiles[i].startingLocation = getDirectoryOffset(&fileDentry);
-            // printf("Inside Open and Store File, starting location is: %d\n", openedFiles[i].startingLocation);
+            printf("Inside Open and Store File, starting location is: %d\n", openedFiles[i].startingLocation);
 
             printf("Opened %s\n", tokens->items[1]);
             flag = 1;
@@ -335,7 +338,7 @@ int readOneCluster(FILE* fd, uint32_t address, int toDo, tokenlist *tokens)
                 {
                     if(dir[i].DIR_Attr == 0x10) // only look at directories
                     {
-                        if(toDo == 1)
+                        if(toDo == 1) // cd
                         {
                             changeDentry(&dir[i]);
                             initializeVariables();
@@ -474,6 +477,9 @@ void executeCD(FILE *fd, tokenlist *tokens)
                 }
             }
             dentryPathLocation--;
+            for (int i = 0; i < dentryPathLocation; i++) {
+                printf("LOC 479: name: %s, cluster number: %u\n", dentryPath[i].DIR_Name, (dentryPath[i].DIR_FstClusHI << 16 + dentryPath[i].DIR_FstClusLO));
+            }
             currentDirectory = getDirectoryOffset(&dentryPath[dentryPathLocation - 1]);
         }
     }
@@ -810,7 +816,7 @@ int main(int argc, char const *argv[])
     // check that file name was passed in ********************************************************************************************************************
     // check that file exists ******************************************************************************************************************** 
     FILE* fd = fopen(argv[1], "rw");
-    if (fd < 0)
+    if (fd == NULL)
     { 
         perror("Error opening file failed: ");
         return 1;
